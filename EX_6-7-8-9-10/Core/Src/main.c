@@ -135,8 +135,8 @@ int main(void)
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
   int hours = 2;
-  int minutes = 25;
-  int seconds = 50;
+  int minutes = 0;
+  int seconds = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
