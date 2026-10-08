@@ -32,11 +32,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define SCAN_TIME      1   /* 1 x 10ms = 10ms per column -> steady image          */
-#define SHIFT_TIME     50  /* 50 x 10ms = 500ms between shifts (Exercise 10)      */
-#define HEARTBEAT_TIME 50  /* 50 x 10ms = 500ms -> D1 blinks at 1Hz (power check) */
+#define SWITCH_TIME   250  /* 250ms per digit -> 4 digits = 1s = 1Hz scanning */
+#define MATRIX_TIME   10   /* 10ms per matrix column (Exercise 9)            */
+#define SHIFT_TIME    500  /* 500ms between shifts (Exercise 10)             */
 
-#define ENABLE_SHIFT   0   /* 0 = Exercise 9 (static "A"), 1 = Exercise 10 (shift) */
+#define ENABLE_SHIFT  0    /* 0 = Exercise 9 (static "A"), 1 = Exercise 10 (shift) */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -48,6 +48,13 @@
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
+/* 7-segment clock (from Exercise 8) */
+const int MAX_LED = 4;
+int index_led = 0;
+int led_buffer[4] = {0, 0, 0, 0};   /* filled by updateClockBuffer() */
+int hour = 15, minute = 8, second = 50;
+
+/* LED matrix (Exercise 9) */
 const int MAX_LED_MATRIX = 8;
 int index_led_matrix = 0;
 
@@ -58,15 +65,6 @@ uint16_t ROW_PINS[8] = {ROW0_Pin, ROW1_Pin, ROW2_Pin, ROW3_Pin,
                          ROW4_Pin, ROW5_Pin, ROW6_Pin, ROW7_Pin};
 uint16_t ENM_PINS[8] = {ENM0_Pin, ENM1_Pin, ENM2_Pin, ENM3_Pin,
                          ENM4_Pin, ENM5_Pin, ENM6_Pin, ENM7_Pin};
-
-/* Software timers: counted down in the interrupt, flags handled in main() */
-int scan_counter = SCAN_TIME;
-volatile int scan_flag = 0;
-
-int shift_counter = SHIFT_TIME;
-volatile int shift_flag = 0;
-
-int heartbeat_counter = HEARTBEAT_TIME;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,6 +77,132 @@ static void MX_TIM2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/* Software timers, counted down every timer interrupt (10ms)
+   timer0: 1s tick for the clock and the DOT
+   timer1: 250ms tick for 7-segment scanning
+   timer2: 10ms tick for LED matrix column scanning (Exercise 9)
+   timer3: 500ms tick for shifting the matrix (Exercise 10)      */
+int timer0_counter = 0;
+volatile int timer0_flag = 0;   /* volatile: set in the interrupt, read in main */
+int timer1_counter = 0;
+volatile int timer1_flag = 0;
+int timer2_counter = 0;
+volatile int timer2_flag = 0;
+int timer3_counter = 0;
+volatile int timer3_flag = 0;
+int TIMER_CYCLE = 10;           /* timer interrupt period in ms */
+
+void setTimer0(int duration)
+{
+  timer0_counter = duration / TIMER_CYCLE;
+  timer0_flag = 0;
+}
+
+void setTimer1(int duration)
+{
+  timer1_counter = duration / TIMER_CYCLE;
+  timer1_flag = 0;
+}
+
+void setTimer2(int duration)
+{
+  timer2_counter = duration / TIMER_CYCLE;
+  timer2_flag = 0;
+}
+
+void setTimer3(int duration)
+{
+  timer3_counter = duration / TIMER_CYCLE;
+  timer3_flag = 0;
+}
+
+void timer_run(void)
+{
+  if (timer0_counter > 0)
+  {
+    timer0_counter--;
+    if (timer0_counter == 0) timer0_flag = 1;
+  }
+  if (timer1_counter > 0)
+  {
+    timer1_counter--;
+    if (timer1_counter == 0) timer1_flag = 1;
+  }
+  if (timer2_counter > 0)
+  {
+    timer2_counter--;
+    if (timer2_counter == 0) timer2_flag = 1;
+  }
+  if (timer3_counter > 0)
+  {
+    timer3_counter--;
+    if (timer3_counter == 0) timer3_flag = 1;
+  }
+}
+
+/* Common-anode 7-segment: a segment is ON when its pin is LOW.
+   SEG0..SEG6 = a..g. Bit i of the table = segment i (1 = ON).            */
+void display7SEG(int num)
+{
+  static const uint8_t SEG_TABLE[10] = {
+    0x3F, /* 0 */ 0x06, /* 1 */ 0x5B, /* 2 */ 0x4F, /* 3 */ 0x66, /* 4 */
+    0x6D, /* 5 */ 0x7D, /* 6 */ 0x07, /* 7 */ 0x7F, /* 8 */ 0x6F  /* 9 */
+  };
+  GPIO_TypeDef* const port[7] = {SEG0_GPIO_Port, SEG1_GPIO_Port, SEG2_GPIO_Port,
+                                 SEG3_GPIO_Port, SEG4_GPIO_Port, SEG5_GPIO_Port,
+                                 SEG6_GPIO_Port};
+  const uint16_t pin[7] = {SEG0_Pin, SEG1_Pin, SEG2_Pin, SEG3_Pin,
+                           SEG4_Pin, SEG5_Pin, SEG6_Pin};
+
+  uint8_t code = (num >= 0 && num <= 9) ? SEG_TABLE[num] : 0x00; /* invalid -> blank */
+  for (int i = 0; i < 7; i++)
+  {
+    HAL_GPIO_WritePin(port[i], pin[i], ((code >> i) & 1) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+  }
+}
+
+/* Show led_buffer[index] on 7-segment number 'index'.
+   PNP transistors: a digit is ON when its EN pin is LOW.              */
+void update7SEG(int index)
+{
+  /* All digits OFF first so the new number doesn't ghost on the old digit */
+  HAL_GPIO_WritePin(EN0_GPIO_Port, EN0_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EN1_GPIO_Port, EN1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EN2_GPIO_Port, EN2_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EN3_GPIO_Port, EN3_Pin, GPIO_PIN_SET);
+
+  switch (index)
+  {
+    case 0:
+      display7SEG(led_buffer[0]);
+      HAL_GPIO_WritePin(EN0_GPIO_Port, EN0_Pin, GPIO_PIN_RESET);
+      break;
+    case 1:
+      display7SEG(led_buffer[1]);
+      HAL_GPIO_WritePin(EN1_GPIO_Port, EN1_Pin, GPIO_PIN_RESET);
+      break;
+    case 2:
+      display7SEG(led_buffer[2]);
+      HAL_GPIO_WritePin(EN2_GPIO_Port, EN2_Pin, GPIO_PIN_RESET);
+      break;
+    case 3:
+      display7SEG(led_buffer[3]);
+      HAL_GPIO_WritePin(EN3_GPIO_Port, EN3_Pin, GPIO_PIN_RESET);
+      break;
+    default:
+      break;
+  }
+}
+
+/* Copy hour and minute into led_buffer as HH MM. */
+void updateClockBuffer(void)
+{
+  led_buffer[0] = hour / 10;
+  led_buffer[1] = hour % 10;
+  led_buffer[2] = minute / 10;
+  led_buffer[3] = minute % 10;
+}
+
 /* Exercise 9: display one column of matrix_buffer at a time (column scanning).
    Circuit logic (ULN2803 inverts, 100R pull-ups on the columns):
      ENMx = 1 -> ULN2803 pulls COLx LOW  -> column OFF
@@ -146,36 +270,66 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  /* Start with DOT and LED_RED off (HIGH = off) */
+  HAL_GPIO_WritePin(DOT_GPIO_Port, DOT_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
+
   /* Start with every matrix column OFF and every row OFF */
   HAL_GPIO_WritePin(GPIOA, ENM0_Pin|ENM1_Pin|ENM2_Pin|ENM3_Pin
                           |ENM4_Pin|ENM5_Pin|ENM6_Pin|ENM7_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(GPIOB, ROW0_Pin|ROW1_Pin|ROW2_Pin|ROW3_Pin
                           |ROW4_Pin|ROW5_Pin|ROW6_Pin|ROW7_Pin, GPIO_PIN_SET);
 
+  /* Load the starting time and show the first digit */
+  updateClockBuffer();
+  update7SEG(index_led++);
+
   HAL_TIM_Base_Start_IT(&htim2);
+
+  setTimer0(1000);          /* clock + DOT        */
+  setTimer1(SWITCH_TIME);   /* 7-segment scanning */
+  setTimer2(MATRIX_TIME);   /* matrix scanning    */
+  setTimer3(SHIFT_TIME);    /* matrix shifting    */
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* Exercise 9: column scanning, called from main (not from the interrupt) */
-    if (scan_flag == 1)
+    /* Clock + DOT: every 1s (software timer 0) */
+    if (timer0_flag == 1)
     {
-      scan_flag = 0;
-      updateLEDMatrix(index_led_matrix);
-      index_led_matrix++;
-      if (index_led_matrix >= MAX_LED_MATRIX)
-      {
-        index_led_matrix = 0;
-      }
+      setTimer0(1000);
+      HAL_GPIO_TogglePin(DOT_GPIO_Port, DOT_Pin);
+
+      second++;
+      if (second >= 60) { second = 0; minute++; }
+      if (minute >= 60) { minute = 0; hour++; }
+      if (hour >= 24)   { hour = 0; }
+      updateClockBuffer();
+    }
+
+    /* 7-segment scanning: next digit every 250ms (software timer 1) */
+    if (timer1_flag == 1)
+    {
+      setTimer1(SWITCH_TIME);
+      if (index_led >= MAX_LED) index_led = 0;
+      update7SEG(index_led++);
+    }
+
+    /* Exercise 9: LED matrix scanning, next column every 10ms (software timer 2) */
+    if (timer2_flag == 1)
+    {
+      setTimer2(MATRIX_TIME);
+      updateLEDMatrix(index_led_matrix++);
+      if (index_led_matrix >= MAX_LED_MATRIX) index_led_matrix = 0;
     }
 
 #if ENABLE_SHIFT
-    /* Exercise 10: shift the character left every SHIFT_TIME */
-    if (shift_flag == 1)
+    /* Exercise 10: shift the character left every 500ms (software timer 3) */
+    if (timer3_flag == 1)
     {
-      shift_flag = 0;
+      setTimer3(SHIFT_TIME);
       shiftLeftMatrix();
     }
 #endif
@@ -320,45 +474,13 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/* The interrupt (every 10ms) only runs the software timers and sets flags.
-   All the real work is done in main() (Exercise 8 rule). */
+/* The interrupt (every 10ms) only runs the software timers.
+   All processing is done in the main loop (Exercise 8 rule). */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if (htim->Instance != TIM2) return;
 
-  /* Exercise 9: column scan timer */
-  if (scan_counter > 0)
-  {
-    scan_counter--;
-    if (scan_counter == 0)
-    {
-      scan_flag = 1;
-      scan_counter = SCAN_TIME;
-    }
-  }
-
-  /* Exercise 10: shift timer */
-  if (shift_counter > 0)
-  {
-    shift_counter--;
-    if (shift_counter == 0)
-    {
-      shift_flag = 1;
-      shift_counter = SHIFT_TIME;
-    }
-  }
-
-  /* Power check: D1 (LED_RED) blinks at 1Hz.
-     If PA5 toggles but D1 never lights, the +3.3V rail in Proteus is dead. */
-  if (heartbeat_counter > 0)
-  {
-    heartbeat_counter--;
-    if (heartbeat_counter == 0)
-    {
-      heartbeat_counter = HEARTBEAT_TIME;
-      HAL_GPIO_TogglePin(GPIOA, LED_RED_Pin);
-    }
-  }
+  timer_run();
 }
 /* USER CODE END 4 */
 
