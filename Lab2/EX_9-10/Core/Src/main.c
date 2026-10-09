@@ -34,9 +34,9 @@
 /* USER CODE BEGIN PD */
 #define SWITCH_TIME   250  /* 250ms per digit -> 4 digits = 1s = 1Hz scanning */
 #define MATRIX_TIME   10   /* 10ms per matrix column (Exercise 9)            */
-#define SHIFT_TIME    500  /* 500ms between shifts (Exercise 10)             */
+#define SHIFT_TIME    200  /* 500ms between shifts (Exercise 10)             */
 
-#define ENABLE_SHIFT  0    /* 0 = Exercise 9 (static "A"), 1 = Exercise 10 (shift) */
+#define ENABLE_SHIFT  1    /* 0 = Exercise 9 (static "A"), 1 = Exercise 10 (shift) */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,6 +53,16 @@ const int MAX_LED = 4;
 int index_led = 0;
 int led_buffer[4] = {0, 0, 0, 0};   /* filled by updateClockBuffer() */
 int hour = 15, minute = 8, second = 50;
+
+
+/* Exercise 10: scrolling text. The "A" followed by 8 blank columns, so the
+   character leaves the screen completely before entering again from the right. */
+#define SCROLL_LEN 16
+const uint8_t scroll_buffer[SCROLL_LEN] = {
+  0x00, 0x7C, 0x12, 0x11, 0x11, 0x12, 0x7C, 0x00,   /* "A"           */
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00    /* blank gap     */
+};
+int scroll_pos = 0;   /* first column of scroll_buffer shown on the matrix */
 
 /* LED matrix (Exercise 9) */
 const int MAX_LED_MATRIX = 8;
@@ -231,12 +241,13 @@ void updateLEDMatrix(int index)
 /* Exercise 10: shift the displayed character left, wrapping around for a looping animation. */
 void shiftLeftMatrix(void)
 {
-  uint8_t first = matrix_buffer[0];
-  for (int i = 0; i < MAX_LED_MATRIX - 1; i++)
-  {
-    matrix_buffer[i] = matrix_buffer[i + 1];
-  }
-  matrix_buffer[MAX_LED_MATRIX - 1] = first;
+	scroll_pos++;
+	  if (scroll_pos >= SCROLL_LEN) scroll_pos = 0;
+
+	  for (int i = 0; i < MAX_LED_MATRIX; i++)
+	  {
+	    matrix_buffer[i] = scroll_buffer[(scroll_pos + i) % SCROLL_LEN];
+	  }
 }
 /* USER CODE END 0 */
 
