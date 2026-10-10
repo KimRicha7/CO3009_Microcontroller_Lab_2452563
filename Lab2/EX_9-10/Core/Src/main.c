@@ -34,7 +34,7 @@
 /* USER CODE BEGIN PD */
 #define SWITCH_TIME   250  /* 250ms per digit -> 4 digits = 1s = 1Hz scanning */
 #define MATRIX_TIME   10   /* 10ms per matrix column (Exercise 9)            */
-#define SHIFT_TIME    200  /* 500ms between shifts (Exercise 10)             */
+#define SHIFT_TIME    200  /* 200ms between shifts (Exercise 10)             */
 
 #define ENABLE_SHIFT  1    /* 0 = Exercise 9 (static "A"), 1 = Exercise 10 (shift) */
 /* USER CODE END PD */
