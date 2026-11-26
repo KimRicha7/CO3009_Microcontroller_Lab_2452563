@@ -1,0 +1,4 @@
+uart_communication.c:21:17:read_adc	16	static
+uart_communication.c:31:13:send_packet	8	static
+uart_communication.c:36:13:new_response	8	static
+uart_communication.c:43:6:uart_communication_fsm	8	static

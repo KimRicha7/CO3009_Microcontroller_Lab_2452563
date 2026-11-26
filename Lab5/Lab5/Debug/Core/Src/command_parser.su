@@ -1,0 +1,2 @@
+command_parser.c:24:13:finish_command	8	static
+command_parser.c:34:6:command_parser_fsm	16	static
